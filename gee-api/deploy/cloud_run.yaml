@@ -1,0 +1,79 @@
+apiVersion: run.googleapis.com/v1
+kind: Service
+metadata:
+  name: geo-intelligence-api
+  namespace: default
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/maxScale: '10'
+        autoscaling.knative.dev/minScale: '1'
+        run.googleapis.com/cpu-throttling: 'true'
+    spec:
+      containers:
+      - name: geo-intelligence-api
+        image: gcr.io/your-project/geo-intelligence-api:latest
+        ports:
+        - containerPort: 8080
+        resources:
+          limits:
+            cpu: 2000m
+            memory: 2048Mi
+          requests:
+            cpu: 1000m
+            memory: 512Mi
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: AUTH_MODE
+          value: "remote"
+        - name: REDIS_HOST
+          value: "redis-memorystore.googleapis.com"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: GCP_PROJECT_ID
+          valueFrom:
+            secretKeyRef:
+              name: gcp-secrets
+              key: project-id
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: gemini-secrets
+              key: api-key
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: auth-secrets
+              key: jwt-secret
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          failureThreshold: 30
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 20
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+      serviceAccountName: geo-intelligence-sa
+      timeoutSeconds: 300
+  traffic:
+  - percent: 100
+    latestRevision: true
