@@ -1,0 +1,2 @@
+chmod +x generate_gee_production_scaffold.sh
+./generate_gee_production_scaffold.sh
