@@ -8,6 +8,10 @@ from typing import Dict, Any, List, Optional, AsyncGenerator
 
 from config import get_config
 from utils.exceptions import GeminiError
+from utils.google_embeddings import google_embeddings
+from fastapi import HTTPException
+from typing import Dict, Any, List, Optional
+import numpy as np
 
 
 class InsightService:
@@ -212,3 +216,48 @@ Provide accurate, data-driven analysis using satellite imagery. Be concise and a
             }
         except Exception as e:
             raise GeminiError(str(e))
+
+    async def create_document_embeddings(self, chunks: List[str], model: Optional[str] = None) -> List[Optional[List[float]]]:
+        """Create embeddings for document chunks using Google Gemini"""
+        if not google_embeddings.is_ready:
+            raise HTTPException(status_code=503, detail="Embedding service not available")
+
+        embeddings = await google_embeddings.create_batch_embeddings(
+            texts=chunks,
+            model=model or get_config().gemini.model,
+            task_type=getattr(get_config(), 'google_embedding_task_type', 'RETRIEVAL_DOCUMENT'),
+            batch_size=getattr(get_config(), 'google_embedding_batch_size', 10)
+        )
+
+        return embeddings
+
+    async def semantic_search(self, query: str, document_embeddings: List[List[float]], documents: List[str], top_k: int = 5) -> List[Dict[str, Any]]:
+        """Perform semantic search using query embedding"""
+        if not google_embeddings.is_ready:
+            raise HTTPException(status_code=503, detail="Embedding service not available")
+
+        query_embedding = await google_embeddings.create_query_embedding(query)
+        if not query_embedding:
+            return []
+
+        similarities = []
+        qv = np.array(query_embedding)
+        for i, emb in enumerate(document_embeddings):
+            if emb:
+                dv = np.array(emb)
+                denom = (np.linalg.norm(qv) * np.linalg.norm(dv))
+                sim = float(np.dot(qv, dv) / denom) if denom else 0.0
+                similarities.append((i, sim))
+
+        similarities.sort(key=lambda x: x[1], reverse=True)
+
+        results: List[Dict[str, Any]] = []
+        for idx, score in similarities[:top_k]:
+            results.append({
+                "index": idx,
+                "text": documents[idx][:500],
+                "similarity_score": float(score),
+                "relevance": "high" if score > 0.7 else "medium" if score > 0.5 else "low"
+            })
+
+        return results

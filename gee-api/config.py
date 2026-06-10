@@ -186,6 +186,7 @@ class AppConfig:
     port: int = 8000
     workers: int = 4
     global_max_concurrent: int = 50
+    trusted_proxies: str = "127.0.0.1,::1,10.0.0.0/8"
     
     # Sub-configurations
     earth_engine: EarthEngineConfig = field(default_factory=EarthEngineConfig)
@@ -195,6 +196,16 @@ class AppConfig:
     rate_limit: RateLimitConfig = field(default_factory=RateLimitConfig)
     geospatial: GeospatialConfig = field(default_factory=GeospatialConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
+    # Google Embeddings Configuration
+    google_embedding_model: str = "text-embedding-004"
+    google_embedding_task_type: str = "RETRIEVAL_DOCUMENT"
+    google_embedding_batch_size: int = 10
+    google_embedding_max_retries: int = 3
+    google_embedding_timeout: int = 30
+
+    # Embedding Cache
+    embedding_cache_max_size: int = 10000
+    embedding_cache_ttl: int = 86400  # seconds
     
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -207,6 +218,7 @@ class AppConfig:
             port=int(os.getenv("PORT", "8000")),
             workers=int(os.getenv("WORKERS", "4")),
             global_max_concurrent=int(os.getenv("GLOBAL_MAX_CONCURRENT", "50")),
+            trusted_proxies=os.getenv("TRUSTED_PROXIES", "127.0.0.1,::1,10.0.0.0/8"),
             earth_engine=EarthEngineConfig.from_env(),
             gemini=GeminiConfig.from_env(),
             auth=AuthConfig.from_env(),
@@ -214,6 +226,14 @@ class AppConfig:
             rate_limit=RateLimitConfig.from_env(),
             geospatial=GeospatialConfig.from_env(),
             storage=StorageConfig.from_env()
+            ,
+            google_embedding_model=os.getenv("GOOGLE_EMBEDDING_MODEL", "text-embedding-004"),
+            google_embedding_task_type=os.getenv("GOOGLE_EMBEDDING_TASK_TYPE", "RETRIEVAL_DOCUMENT"),
+            google_embedding_batch_size=int(os.getenv("GOOGLE_EMBEDDING_BATCH_SIZE", "10")),
+            google_embedding_max_retries=int(os.getenv("GOOGLE_EMBEDDING_MAX_RETRIES", "3")),
+            google_embedding_timeout=int(os.getenv("GOOGLE_EMBEDDING_TIMEOUT", "30")),
+            embedding_cache_max_size=int(os.getenv("EMBEDDING_CACHE_MAX_SIZE", "10000")),
+            embedding_cache_ttl=int(os.getenv("EMBEDDING_CACHE_TTL", "86400"))
         )
 
 

@@ -9,6 +9,12 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 
 
+request_context: Dict[str, Any] = {
+    "request_id": "unknown",
+    "user_id": "anonymous"
+}
+
+
 class JSONFormatter(logging.Formatter):
     """JSON formatter for structured logging"""
     
@@ -42,9 +48,6 @@ class RequestContextFilter(logging.Filter):
     """Add request context to log records"""
     
     def filter(self, record: logging.LogRecord) -> bool:
-        import asyncio
-        from middleware.auth_middleware import get_request_context
-        
         context = get_request_context()
         record.request_id = context.get('request_id', 'unknown')
         record.user_id = context.get('user_id', 'anonymous')
@@ -93,6 +96,29 @@ def setup_logging(
     root_logger.info(f"Logging configured | level={log_level} | format={log_format} | service={service_name}")
 
 
+def set_request_id(request_id: str, user_id: Optional[str] = None):
+    request_context["request_id"] = request_id
+    if user_id:
+        request_context["user_id"] = user_id
+
+
+def clear_request_id():
+    request_context["request_id"] = "unknown"
+    request_context["user_id"] = "anonymous"
+
+
+def get_request_context() -> Dict[str, str]:
+    return {
+        "request_id": request_context.get("request_id", "unknown"),
+        "user_id": request_context.get("user_id", "anonymous"),
+    }
+
+
+def set_request_context(context: Dict[str, str]) -> None:
+    request_context["request_id"] = context.get("request_id", "unknown")
+    request_context["user_id"] = context.get("user_id", "anonymous")
+
+
 class LoggerContext:
     """Context manager for request-scoped logging context"""
     
@@ -102,9 +128,6 @@ class LoggerContext:
         self._old_context = None
     
     def __enter__(self):
-        import asyncio
-        from middleware.auth_middleware import set_request_context
-        
         self._old_context = get_request_context()
         set_request_context({
             'request_id': self.request_id,
@@ -113,7 +136,6 @@ class LoggerContext:
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
-        from middleware.auth_middleware import set_request_context
         set_request_context(self._old_context)
 
 

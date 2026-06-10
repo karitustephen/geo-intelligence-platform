@@ -1,138 +1,263 @@
 """
-AI insight generation using Google Gemini AI
+AI insight service using Google Gemini AI
 """
 
 import json
-from typing import Dict, Any, Optional, AsyncGenerator
-from datetime import datetime
+import time
+from typing import Dict, Any, List, Optional, AsyncGenerator
 
 from config import get_config
 from utils.exceptions import GeminiError
+from utils.google_embeddings import google_embeddings
+from fastapi import HTTPException
+from typing import Dict, Any, List, Optional
+import numpy as np
 
 
-class AIInsightGenerator:
-    """Generate environmental insights using Google Gemini AI"""
+class InsightService:
+    """Service for AI-powered environmental insights using Gemini"""
     
     def __init__(self):
         self.config = get_config()
-        self._client = None
+        self._gemini_initialized = False
+        self.gemini_model = self.config.gemini.model
     
-    def _init_client(self):
+    def _init_gemini(self):
         """Initialize Gemini AI client"""
-        if self._client:
+        if self._gemini_initialized:
             return
         
         try:
             from google import genai
-            self._client = genai.Client(api_key=self.config.gemini.api_key)
+            from google.genai.types import GenerateContentConfig
+            
+            self.client = genai.Client(api_key=self.config.gemini.api_key)
+            self._gemini_initialized = True
         except Exception as e:
-            raise GeminiError(f"Failed to initialize client: {str(e)}")
+            raise GeminiError(f"Failed to initialize: {str(e)}")
     
-    async def generate_analysis(self, prompt: str, stream: bool = False) -> Dict[str, Any]:
-        """Generate AI analysis from prompt"""
-        self._init_client()
+    async def get_environmental_insights(self, request) -> Dict[str, Any]:
+        """Generate AI-powered environmental insights"""
+        self._init_gemini()
+        
+        prompt = self._build_insight_prompt(request)
         
         try:
-            if stream:
-                return await self._stream_response(prompt)
-            else:
-                return await self._generate_response(prompt)
+            response = self.client.models.generate_content(
+                model=self.gemini_model,
+                contents=prompt,
+                config={
+                    "temperature": self.config.gemini.temperature,
+                    "max_output_tokens": self.config.gemini.max_output_tokens
+                }
+            )
+            
+            return {
+                "insights": response.text,
+                "query": request.query,
+                "model": self.gemini_model,
+                "generated_at": time.time()
+            }
         except Exception as e:
             raise GeminiError(str(e))
     
-    async def _generate_response(self, prompt: str) -> Dict[str, Any]:
-        """Generate non-streaming response"""
-        response = self._client.models.generate_content(
-            model=self.config.gemini.model,
-            contents=prompt,
-            config={
-                "temperature": self.config.gemini.temperature,
-                "max_output_tokens": self.config.gemini.max_output_tokens
-            }
-        )
+    def _build_insight_prompt(self, request) -> str:
+        """Build prompt for Gemini AI"""
+        system_prompt = """You are Arybit Geospatial Intelligence, an expert environmental monitoring AI.
+Provide accurate, data-driven analysis using satellite imagery. Be concise and actionable."""
         
-        return {
-            "content": response.text,
-            "model": self.config.gemini.model,
-            "usage": {
-                "prompt_tokens": getattr(response, 'usage_metadata', {}).get('prompt_token_count', 0),
-                "completion_tokens": getattr(response, 'usage_metadata', {}).get('candidates_token_count', 0)
-            }
-        }
+        prompt = system_prompt + "\n\n"
+        
+        if request.context_data:
+            prompt += f"## Geospatial Data:\n{json.dumps(request.context_data, indent=2)}\n\n"
+        
+        prompt += f"## User Query:\n{request.query}\n\n"
+        prompt += "## Response Requirements:\n"
+        prompt += "1. Assess the current environmental situation\n"
+        prompt += "2. Identify trends or changes\n"
+        prompt += "3. Provide actionable recommendations\n"
+        prompt += "4. Note any data limitations\n"
+        
+        return prompt
     
-    async def _stream_response(self, prompt: str):
-        """Generate streaming response"""
-        response = self._client.models.generate_content_stream(
-            model=self.config.gemini.model,
-            contents=prompt,
-            config={
-                "temperature": self.config.gemini.temperature,
-                "max_output_tokens": self.config.gemini.max_output_tokens
-n            }
-        )
+    async def analyze_vegetation_health(self, request) -> Dict[str, Any]:
+        """Analyze vegetation health with AI interpretation"""
+        self._init_gemini()
         
-        async def stream():
-            for chunk in response:
-                if chunk.text:
-                    yield chunk.text
-        
-        return stream()
-    
-    async def analyze_vegetation(self, ndvi_data: Dict, location: Dict) -> Dict[str, Any]:
-        """Analyze vegetation health from NDVI data"""
-        self._init_client()
-        
+        # Build analysis prompt
         prompt = f"""
-        Analyze vegetation health based on NDVI data:
-        
-        Location: {json.dumps(location)}
-        NDVI Values: {json.dumps(ndvi_data)}
+        Analyze vegetation health for location: {request.location.dict()}
+        Time range: {request.time_range.start_date} to {request.time_range.end_date}
+        Metrics: {', '.join(request.metrics)}
         
         Provide:
-        1. Current vegetation health assessment
+        1. Overall vegetation health assessment
         2. Trend analysis (improving, stable, degrading)
         3. Potential causes for observed patterns
-        4. Actionable recommendations
+        4. Actionable recommendations for land management
         """
         
-        return await self._generate_response(prompt)
+        try:
+            response = self.client.models.generate_content(
+                model=self.gemini_model,
+                contents=prompt,
+                config={"temperature": self.config.gemini.temperature}
+            )
+            
+            return {
+                "analysis": response.text,
+                "metrics": request.metrics,
+                "location": request.location.dict(),
+                "model": self.gemini_model
+            }
+        except Exception as e:
+            raise GeminiError(str(e))
     
-    async def assess_change(self, change_data: Dict, region: Dict) -> Dict[str, Any]:
-        """Assess environmental change significance"""
-        self._init_client()
+    async def assess_wildfire_risk(self, request) -> Dict[str, Any]:
+        """Assess wildfire risk with AI"""
+        self._init_gemini()
         
         prompt = f"""
-        Assess environmental change significance:
+        Assess wildfire risk for region: {request.region.dict()}
+        Assessment date: {request.date}
         
-        Region: {json.dumps(region)}
-        Change Detection Results: {json.dumps(change_data)}
+        Based on vegetation moisture data, provide:
+        1. Risk level (Low/Medium/High/Critical)
+        2. Primary contributing factors
+        3. Specific recommendations for:
+           - Monitoring frequency
+           - Prevention measures
+           - Response preparedness
+        """
+        
+        try:
+            response = self.client.models.generate_content(
+                model=self.gemini_model,
+                contents=prompt,
+                config={"temperature": self.config.gemini.temperature}
+            )
+            
+            return {
+                "risk_assessment": response.text,
+                "region": request.region.dict(),
+                "date": request.date,
+                "model": self.gemini_model
+            }
+        except Exception as e:
+            raise GeminiError(str(e))
+    
+    async def interpret_change(self, request) -> Dict[str, Any]:
+        """Interpret change detection results"""
+        self._init_gemini()
+        
+        prompt = f"""
+        Interpret these environmental change detection results:
+        
+        Change Data: {json.dumps(request.change_data, indent=2)}
+        Region: {json.dumps(request.region.dict())}
+        Time Period: {request.time_range.start_date} to {request.time_range.end_date}
         
         Provide:
-        1. Assessment of change severity
-        2. Potential environmental impacts
-        3. Recommended monitoring frequency
-        4. Suggested interventions if needed
+        1. Summary of significant changes detected
+        2. Environmental implications
+        3. Potential drivers of change
+        4. Recommended follow-up actions
         """
         
-        return await self._generate_response(prompt)
+        try:
+            response = self.client.models.generate_content(
+                model=self.gemini_model,
+                contents=prompt,
+                config={"temperature": self.config.gemini.temperature}
+            )
+            
+            return {
+                "interpretation": response.text,
+                "change_data": request.change_data,
+                "model": self.gemini_model
+            }
+        except Exception as e:
+            raise GeminiError(str(e))
     
-    async def generate_report(self, analyses: Dict, format: str = "summary") -> Dict[str, Any]:
-        """Generate comprehensive environmental report"""
-        self._init_client()
+    async def generate_forecast(self, request) -> Dict[str, Any]:
+        """Generate environmental forecast with AI"""
+        self._init_gemini()
         
         prompt = f"""
-        Generate an environmental report based on the following analyses:
+        Generate environmental forecast for location: {request.location.dict()}
         
-        {json.dumps(analyses, indent=2)}
+        Historical data (last {request.historical_days} days):
+        {json.dumps(request.historical_data, indent=2)}
         
-        Report Format: {format}
+        Forecast horizon: {request.forecast_days} days
         
-        Include:
-        1. Executive summary
-        2. Key findings
-        3. Risk assessment
-        4. Recommendations
-        5. Data limitations
+        Provide:
+        1. Predicted trends for key environmental metrics
+        2. Expected changes and their significance
+        3. Recommendations for adaptation or mitigation
+        4. Confidence level for the forecast
         """
         
-        return await self._generate_response(prompt)
+        try:
+            response = self.client.models.generate_content(
+                model=self.gemini_model,
+                contents=prompt,
+                config={
+                    "temperature": self.config.gemini.temperature,
+                    "max_output_tokens": self.config.gemini.max_output_tokens
+                }
+            )
+            
+            return {
+                "forecast": response.text,
+                "location": request.location.dict(),
+                "forecast_days": request.forecast_days,
+                "model": self.gemini_model
+            }
+        except Exception as e:
+            raise GeminiError(str(e))
+
+    async def create_document_embeddings(self, chunks: List[str], model: Optional[str] = None) -> List[Optional[List[float]]]:
+        """Create embeddings for document chunks using Google Gemini"""
+        if not google_embeddings.is_ready:
+            raise HTTPException(status_code=503, detail="Embedding service not available")
+
+        embeddings = await google_embeddings.create_batch_embeddings(
+            texts=chunks,
+            model=model or get_config().gemini.model,
+            task_type=getattr(get_config(), 'google_embedding_task_type', 'RETRIEVAL_DOCUMENT'),
+            batch_size=getattr(get_config(), 'google_embedding_batch_size', 10)
+        )
+
+        return embeddings
+
+    async def semantic_search(self, query: str, document_embeddings: List[List[float]], documents: List[str], top_k: int = 5) -> List[Dict[str, Any]]:
+        """Perform semantic search using query embedding"""
+        if not google_embeddings.is_ready:
+            raise HTTPException(status_code=503, detail="Embedding service not available")
+
+        query_embedding = await google_embeddings.create_query_embedding(query)
+        if not query_embedding:
+            return []
+
+        similarities = []
+        qv = np.array(query_embedding)
+        for i, emb in enumerate(document_embeddings):
+            if emb:
+                dv = np.array(emb)
+                denom = (np.linalg.norm(qv) * np.linalg.norm(dv))
+                sim = float(np.dot(qv, dv) / denom) if denom else 0.0
+                similarities.append((i, sim))
+
+        similarities.sort(key=lambda x: x[1], reverse=True)
+
+        results: List[Dict[str, Any]] = []
+        for idx, score in similarities[:top_k]:
+            results.append({
+                "index": idx,
+                "text": documents[idx][:500],
+                "similarity_score": float(score),
+                "relevance": "high" if score > 0.7 else "medium" if score > 0.5 else "low"
+            })
+
+        return results
