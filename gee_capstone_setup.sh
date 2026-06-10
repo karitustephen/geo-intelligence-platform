@@ -12,6 +12,9 @@ set -Eeuo pipefail
 # ------------------------------------------------------------
 # COLOR CODES
 # ------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GEE_API_DIR="${SCRIPT_DIR}/gee-api"
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -22,25 +25,28 @@ NC='\033[0m' # No Color
 # ------------------------------------------------------------
 # CONFIGURATION
 # ------------------------------------------------------------
+PROJECT_ID="${GCP_PROJECT_ID:-$(gcloud config get-value project 2>/dev/null || echo "gee-capstone-2026")}"
 DEV_MODE="${DEV_MODE:-false}"
-PROJECT_ID="${GCP_PROJECT_ID:-gee-capstone-2026}"
 PROJECT_NAME="${PROJECT_NAME:-Arybit Geospatial Intelligence}"
 REGION="${GCP_REGION:-us-central1}"
-DATASET_NAME="${BIGQUERY_DATASET:-gee_dataset}"
+BQ_LOCATION="US"
+DATASET_NAME="${BIGQUERY_DATASET:-geospatial_analytics}"
+GEE_SA_NAME="gee-intelligence-sa"
+RUN_SA_NAME="arybit-cloudrun-sa"
 
-# Permanent improvement: Ensure credentials are known to the environment if they exist
-if [[ -f "/tmp/gee-key.json" ]]; then
-    export GOOGLE_APPLICATION_CREDENTIALS="/tmp/gee-key.json"
-fi
-SERVICE_ACCOUNT_NAME="gee-intelligence-sa"
 REQUIRED_SERVICES=(
     "earthengine.googleapis.com"
     "bigquery.googleapis.com"
+    "cloudbuild.googleapis.com"
     "aiplatform.googleapis.com"
     "run.googleapis.com"
     "secretmanager.googleapis.com"
     "cloudresourcemanager.googleapis.com"
     "iam.googleapis.com"
+    "monitoring.googleapis.com"
+    "logging.googleapis.com"
+    "artifactregistry.googleapis.com"
+    "billingbudgets.googleapis.com"
 )
 
 # ------------------------------------------------------------
@@ -151,24 +157,21 @@ fi
 ACTIVE_ACCOUNT=$(gcloud auth list --filter=status:ACTIVE --format="value(account)" | head -1)
 log_success "Authenticated as: $ACTIVE_ACCOUNT"
 
-# Check if running in Cloud Shell
-if [[ -n "${CLOUD_SHELL:-}" ]]; then
-    log_info "Running in Google Cloud Shell"
-    PROJECT_ID=$(gcloud config get-value project 2>/dev/null || echo "$PROJECT_ID")
-fi
-
 # ------------------------------------------------------------
 # PROJECT SETUP
 # ------------------------------------------------------------
 log_step "Step 3: Setting up GCP project..."
 
-if ! gcloud projects describe "$PROJECT_ID" >/dev/null 2>&1; then
-    log_info "Creating project: $PROJECT_ID"
-    gcloud projects create "$PROJECT_ID" \
-        --name="$PROJECT_NAME" \
-        --set-as-default
-else
+if gcloud projects describe "$PROJECT_ID" >/dev/null 2>&1; then
     log_info "Project already exists: $PROJECT_ID"
+else
+    log_info "Creating project: $PROJECT_ID"
+    if ! gcloud projects create "$PROJECT_ID" \
+        --name="$PROJECT_NAME" \
+        --set-as-default; then
+        log_error "Failed to create project. Check quotas or project ID availability."
+        exit 1
+    fi
 fi
 
 gcloud config set project "$PROJECT_ID" --quiet
@@ -220,8 +223,20 @@ fi
 log_step "Step 5: Enabling required APIs..."
 
 for service in "${REQUIRED_SERVICES[@]}"; do
-    log_info "Enabling $service..."
-    gcloud services enable "$service" --quiet 2>/dev/null || true
+    log_info "Activating $service..."
+    gcloud services enable "$service" --quiet
+    
+    # Resilient activation check with retry
+    for i in {1..12}; do
+        if gcloud services list --enabled --filter="name:$service" --format="value(name)" | grep -q "$service"; then
+            break
+        fi
+        if [[ $i -eq 12 ]]; then
+            log_error "Timeout waiting for $service activation"
+            exit 1
+        fi
+        sleep 5
+    done
 done
 
 log_success "All required APIs enabled"
@@ -231,42 +246,58 @@ log_success "All required APIs enabled"
 # ------------------------------------------------------------
 log_step "Step 6: Creating service account..."
 
-SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+GEE_SA_EMAIL="${GEE_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+RUN_SA_EMAIL="${RUN_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 
-if ! gcloud iam service-accounts describe "$SERVICE_ACCOUNT_EMAIL" >/dev/null 2>&1; then
-    log_info "Creating service account: $SERVICE_ACCOUNT_NAME"
-    gcloud iam service-accounts create "$SERVICE_ACCOUNT_NAME" \
-        --display-name="Geospatial Intelligence Service Account"
-else
-    log_info "Service account already exists"
+# Create Earth Engine SA
+if ! gcloud iam service-accounts describe "$GEE_SA_EMAIL" >/dev/null 2>&1; then
+    gcloud iam service-accounts create "$GEE_SA_NAME" --display-name="GEE Processing SA"
 fi
 
-log_info "Granting IAM roles..."
-IAM_ROLES=(
-    "roles/earthengine.admin"
-    "roles/storage.admin"
-    "roles/run.admin"
-    "roles/secretmanager.admin"
-    "roles/bigquery.dataOwner"
+# Create Cloud Run Runtime SA
+if ! gcloud iam service-accounts describe "$RUN_SA_EMAIL" >/dev/null 2>&1; then
+    gcloud iam service-accounts create "$RUN_SA_NAME" --display-name="Arybit API Runtime SA"
+fi
+
+log_info "Configuring Least Privilege IAM roles..."
+
+# Earth Engine Permissions
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:${GEE_SA_EMAIL}" --role="roles/earthengine.user" --quiet
+
+# Runtime Permissions
+RUN_ROLES=(
+    "roles/earthengine.user"
+    "roles/storage.objectAdmin"
+    "roles/secretmanager.secretAccessor"
+    "roles/bigquery.dataEditor"
+    "roles/bigquery.jobUser"
     "roles/aiplatform.user"
 )
 
-log_info "Checking existing IAM bindings (optimizing policy updates)..."
-CURRENT_POLICY=$(gcloud projects get-iam-policy "$PROJECT_ID" --format=json 2>/dev/null || echo "{}")
-
-for role in "${IAM_ROLES[@]}"; do
-    if echo "$CURRENT_POLICY" | jq -e ".bindings[] | select(.role == \"$role\") | .members[] | select(. == \"serviceAccount:${SERVICE_ACCOUNT_EMAIL}\")" >/dev/null 2>&1; then
-        log_info "Role $role is already assigned to service account."
-    else
-        log_info "Granting role: $role"
-        gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-            --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
-            --role="$role" \
-            --quiet >/dev/null 2>&1 || true
-    fi
+for role in "${RUN_ROLES[@]}"; do
+    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+        --member="serviceAccount:${RUN_SA_EMAIL}" --role="$role" --quiet
 done
 
-log_success "Service account configured: $SERVICE_ACCOUNT_EMAIL"
+# Cloud Build / Deployment Permissions
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
+
+DEPLOY_ROLES=(
+    "roles/artifactregistry.writer"
+    "roles/artifactregistry.reader"
+    "roles/run.admin"
+    "roles/iam.serviceAccountUser"
+)
+
+for sa in "${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" "service-${PROJECT_NUMBER}@gcp-sa-cloudbuild.iam.gserviceaccount.com"; do
+    for role in "${DEPLOY_ROLES[@]}"; do
+        gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+            --member="serviceAccount:${sa}" --role="$role" --quiet || true
+    done
+done
+
+log_success "Service accounts and Cloud Build IAM configured"
 
 # ------------------------------------------------------------
 # BIGQUERY SETUP
@@ -276,7 +307,7 @@ log_step "Step 7: Setting up BigQuery..."
 if ! bq show "${PROJECT_ID}:${DATASET_NAME}" >/dev/null 2>&1; then
     log_info "Creating BigQuery dataset: $DATASET_NAME"
     bq mk --dataset \
-        --location="$REGION" \
+        --location="$BQ_LOCATION" \
         --description="Geospatial Intelligence Analytics" \
         "${PROJECT_ID}:${DATASET_NAME}"
 else
@@ -289,11 +320,23 @@ CREATE TABLE IF NOT EXISTS `'${PROJECT_ID}.${DATASET_NAME}'.analyses` (
     analysis_id STRING,
     user_id STRING,
     analysis_type STRING,
-    result_json STRING,
+    result_json JSON,
     created_at TIMESTAMP,
     status STRING
 ) PARTITION BY DATE(created_at)
 CLUSTER BY user_id, analysis_type' 2>/dev/null || true
+
+log_info "Creating file metadata table..."
+bq query --use_legacy_sql=false --quiet "
+CREATE TABLE IF NOT EXISTS \`${PROJECT_ID}.${DATASET_NAME}.file_metadata\` (
+    file_id STRING,
+    user_id STRING,
+    filename STRING,
+    gcs_path STRING,
+    uploaded_at TIMESTAMP,
+    status STRING
+) PARTITION BY DATE(uploaded_at)
+CLUSTER BY user_id" 2>/dev/null || true
 
 log_success "BigQuery setup complete"
 
@@ -302,14 +345,14 @@ log_success "BigQuery setup complete"
 # ------------------------------------------------------------
 log_step "Step 8: Setting up Cloud Storage..."
 
-BUCKET_NAME="gee-intelligence-${PROJECT_ID}"
+BUCKET_NAME="gee-intelligence-${PROJECT_ID}-geo"
 
 if ! gsutil ls "gs://${BUCKET_NAME}" >/dev/null 2>&1; then
     log_info "Creating Cloud Storage bucket: $BUCKET_NAME"
     if ! gsutil mb -l "$REGION" "gs://${BUCKET_NAME}" 2>/dev/null; then
         log_warn "Could not create GCS bucket (likely billing restricted). Using local cache mode."
     else
-        gsutil iam ch "serviceAccount:${SERVICE_ACCOUNT_EMAIL}:objectAdmin" "gs://${BUCKET_NAME}"
+        gsutil iam ch "serviceAccount:${RUN_SA_EMAIL}:objectAdmin" "gs://${BUCKET_NAME}"
         log_success "Cloud Storage bucket ready: $BUCKET_NAME"
     fi
 else
@@ -317,22 +360,42 @@ else
 fi
 
 # ------------------------------------------------------------
+# ARTIFACT REGISTRY SETUP
+# ------------------------------------------------------------
+if ! gcloud artifacts repositories describe geo-intelligence --location="$REGION" >/dev/null 2>&1; then
+    log_info "Creating Artifact Registry: geo-intelligence"
+    gcloud artifacts repositories create geo-intelligence \
+        --repository-format=docker --location="$REGION" --quiet
+fi
+gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+# ------------------------------------------------------------
 # EARTH ENGINE SETUP
 # ------------------------------------------------------------
 log_step "Step 9: Installing Python dependencies..."
 
-# Activate virtual environment if it exists to ensure packages are installed in the correct context
-if [[ -d "/workspaces/geo-intelligence-platform/gee-api/.venv" ]]; then
-    log_info "Activating virtual environment for dependency installation..."
-    source "/workspaces/geo-intelligence-platform/gee-api/.venv/bin/activate"
-fi
+cd "$GEE_API_DIR"
+python3 -m venv .venv --quiet || true
+source .venv/bin/activate
 
 # Ensure we don't have the 'jwt' package which conflicts with 'PyJWT'
 python3 -m pip uninstall -y jwt || true
 
-if [[ -f "/workspaces/geo-intelligence-platform/gee-api/requirements.txt" ]]; then
-    log_info "Installing from requirements.txt..."
-    python3 -m pip install --quiet --upgrade -r /workspaces/geo-intelligence-platform/gee-api/requirements.txt
+# Upgrade build tools for Python 3.12 compatibility
+log_info "Upgrading build tools..."
+pip install --quiet --upgrade pip setuptools wheel
+
+if [[ -f "requirements.txt" ]]; then
+    REQ_FILE="requirements.txt"
+
+    # Make script more resilient to obsolete packages
+    if grep -q "google-earth-engine" "$REQ_FILE"; then
+        log_warn "Replacing deprecated google-earth-engine package in requirements.txt"
+        sed -i 's/google-earth-engine==.*$/earthengine-api>=1.0.0/' "$REQ_FILE"
+    fi
+
+    log_info "Installing Python packages from $REQ_FILE..."
+    python3 -m pip install --upgrade -r "$REQ_FILE"
 else
     log_warn "requirements.txt not found, installing base dependencies..."
     python3 -m pip install --quiet --upgrade \
@@ -363,37 +426,20 @@ log_success "Python dependencies installed"
 # ------------------------------------------------------------
 log_step "Step 10: Configuring Earth Engine..."
 
-# Generate service account key for Earth Engine if missing
-if [[ ! -f "/tmp/gee-key.json" ]]; then
-    log_info "Generating service account key for Earth Engine..."
-    gcloud iam service-accounts keys create "/tmp/gee-key.json" \
-        --iam-account="${SERVICE_ACCOUNT_EMAIL}" \
-        --project="${PROJECT_ID}" --quiet || log_warn "Failed to generate SA key"
-fi
+# Set the Earth Engine project context
+earthengine set_project "$PROJECT_ID" || true
 
-# Prefer initialization with Service Account (Option B)
-if [[ -f "/tmp/gee-key.json" ]]; then
-    log_info "Initializing Earth Engine with service account..."
-    python3 << EOF && log_success "Earth Engine initialized with service account" && EE_READY=true || EE_READY=false
+log_info "Using Application Default Credentials (ADC) for Earth Engine."
+log_info "For local development, ensure you have run: gcloud auth application-default login"
+
+python3 << EOF && log_success "Earth Engine verified" || log_warn "Earth Engine verification failed (expected if local auth missing)"
 import ee
 try:
-    credentials = ee.ServiceAccountCredentials('${SERVICE_ACCOUNT_EMAIL}', '/tmp/gee-key.json')
-    ee.Initialize(credentials, project='${PROJECT_ID}')
+    ee.Initialize(project='${PROJECT_ID}')
+    ee.Image("USGS/SRTMGL1_003").getInfo()
 except Exception:
     exit(1)
 EOF
-fi
-
-# Fallback to interactive auth (Option A) if SA initialization failed
-if [[ "${EE_READY:-false}" != "true" ]]; then
-    log_warn "Service account initialization failed. Starting interactive authentication..."
-    log_info "Using --auth_mode=notebook to bypass scope restrictions."
-    earthengine authenticate --auth_mode=notebook || {
-        log_warn "Notebook-mode authentication failed. Falling back to default."
-        earthengine authenticate
-    }
-    log_success "Interactive authentication attempted"
-fi
 
 # ------------------------------------------------------------
 # SECRETS SETUP
@@ -416,11 +462,21 @@ if [[ "$BILLING_ENABLED" == "True" && "$DEV_MODE" != "true" ]]; then
             log_info "Creating secret: $secret_name"
             read -s -p "${SECRETS[$secret_name]}" secret_value
             echo
-            echo -n "$secret_value" | gcloud secrets create "$secret_name" \
+            
+            if [[ "$secret_name" == "gee-api-jwt-secret" ]] && [[ ${#secret_value} -lt 32 ]]; then
+                log_error "JWT secret must be at least 32 characters"
+                exit 1
+            fi
+
+            # Securely create secret using temp file
+            SEC_FILE=$(mktemp)
+            echo -n "$secret_value" > "$SEC_FILE"
+            gcloud secrets create "$secret_name" \
                 --project="$PROJECT_ID" \
                 --replication-policy="automatic" \
-                --data-file=- \
+                --data-file="$SEC_FILE" \
                 --quiet
+            shred -u "$SEC_FILE"
         else
             log_info "Secret already exists: $secret_name"
         fi
@@ -429,7 +485,7 @@ if [[ "$BILLING_ENABLED" == "True" && "$DEV_MODE" != "true" ]]; then
     for secret_name in "${!SECRETS[@]}"; do
         gcloud secrets add-iam-policy-binding "$secret_name" \
             --project="$PROJECT_ID" \
-            --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
+            --member="serviceAccount:${RUN_SA_EMAIL}" \
             --role="roles/secretmanager.secretAccessor" \
             --quiet 2>/dev/null || true
     done
@@ -458,15 +514,15 @@ python3 << EOF
 import sys
 import os
 print("[TEST] Testing Google Cloud services...")
+billing_enabled = "${BILLING_ENABLED}" == "True"
 
 try:
     import ee
-    if os.path.exists('/tmp/gee-key.json'):
-        credentials = ee.ServiceAccountCredentials('${SERVICE_ACCOUNT_EMAIL}', '/tmp/gee-key.json')
-        ee.Initialize(credentials, project='${PROJECT_ID}')
-    else:
-        ee.Initialize(project='${PROJECT_ID}')
-    print("✅ Earth Engine initialized")
+    ee.Initialize(project='${PROJECT_ID}')
+    
+    # Verify actual dataset access (Permission check)
+    ee.Image("USGS/SRTMGL1_003").getInfo()
+    print("✅ Earth Engine initialized and dataset access verified")
 except Exception as e:
     print(f"❌ Earth Engine failed: {e}")
     sys.exit(1)
@@ -474,32 +530,36 @@ except Exception as e:
 try:
     from google.cloud import bigquery
     client = bigquery.Client(project='${PROJECT_ID}')
-    datasets = list(client.list_datasets())
-    for ds in datasets:
-        print(f"Dataset: {ds.dataset_id}")
-    print("✅ BigQuery client initialized")
+    client.query("SELECT 1").result()
+    print("✅ BigQuery query execution successful")
 except Exception as e:
     print(f"❌ BigQuery failed: {e}")
     sys.exit(1)
 
-try:
-    from google.cloud import storage
-    client = storage.Client(project='${PROJECT_ID}')
-    list(client.list_buckets(max_results=1))
-    print("✅ Cloud Storage client initialized")
-except Exception as e:
-    print(f"❌ Cloud Storage failed: {e}")
-    sys.exit(1)
+if billing_enabled:
+    try:
+        from google.cloud import storage
+        client = storage.Client(project='${PROJECT_ID}')
+        bucket = client.bucket('${BUCKET_NAME}')
+        if bucket.exists():
+            print("✅ Cloud Storage bucket validated")
+        else:
+            print("⚠️ Cloud Storage bucket not found")
+    except Exception as e:
+        print(f"❌ Cloud Storage failed: {e}")
+        sys.exit(1)
 
-try:
-    from google.cloud import aiplatform
-    aiplatform.init(project='${PROJECT_ID}', location='${REGION}')
-    print("✅ Vertex AI initialized")
-except Exception as e:
-    print(f"❌ Vertex AI failed: {e}")
-    sys.exit(1)
+    try:
+        from google.cloud import aiplatform
+        aiplatform.init(project='${PROJECT_ID}', location='${REGION}')
+        print("✅ Vertex AI initialized")
+    except Exception as e:
+        print(f"❌ Vertex AI failed: {e}")
+        sys.exit(1)
+else:
+    print("⚠️ Cloud Storage and Vertex AI validation skipped (billing disabled)")
 
-print("\n✅ All services validated successfully!")
+print("\n✅ Service validation complete!")
 EOF
 
 if [[ $? -eq 0 ]]; then
@@ -533,18 +593,17 @@ GCS_BUCKET_NAME="${BUCKET_NAME}"
 BIGQUERY_DATASET="${DATASET_NAME}"
 
 # Service Account
-GEE_SERVICE_ACCOUNT="${SERVICE_ACCOUNT_EMAIL}"
-GEE_PRIVATE_KEY_PATH="/tmp/gee-key.json"
-GOOGLE_APPLICATION_CREDENTIALS="/tmp/gee-key.json"
+GEE_SERVICE_ACCOUNT="${GEE_SA_EMAIL}"
+RUN_SERVICE_ACCOUNT="${RUN_SA_EMAIL}"
 
 # Redis (configure manually if needed)
 REDIS_HOST="localhost"
 REDIS_PORT="6379"
 
 # Placeholder secrets if Secret Manager was skipped
-GEMINI_API_KEY="your-gemini-api-key-for-local-dev"
-REDIS_PASSWORD="development_password"
-JWT_SECRET="development_jwt_secret_for_local_use_only_min_32_chars"
+GEMINI_API_KEY=""
+REDIS_PASSWORD=""
+JWT_SECRET=""
 
 # Authentication
 AUTH_MODE="remote"
@@ -624,7 +683,7 @@ echo "╠═══════════════════════�
 echo "║                                                               ║"
 printf "║   ${GREEN}Project ID${NC}      : $PROJECT_ID%*s\n" $((35 - ${#PROJECT_ID})) ""
 printf "║   ${GREEN}Region${NC}          : $REGION%*s\n" $((35 - ${#REGION})) ""
-printf "║   ${GREEN}Service Account${NC} : $SERVICE_ACCOUNT_EMAIL%*s\n" $((35 - ${#SERVICE_ACCOUNT_EMAIL})) ""
+printf "║   ${GREEN}Runtime SA${NC}      : $RUN_SA_NAME%*s\n" $((35 - ${#RUN_SA_NAME})) ""
 printf "║   ${GREEN}Bucket${NC}          : $BUCKET_NAME%*s\n" $((35 - ${#BUCKET_NAME})) ""
 printf "║   ${GREEN}Dataset${NC}         : $DATASET_NAME%*s\n" $((35 - ${#DATASET_NAME})) ""
 echo "║                                                               ║"
