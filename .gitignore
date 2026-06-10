@@ -1,10 +1,22 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[codz]
-*$py.class
+# ============================================================
+# ARYBIT GEOSPATIAL INTELLIGENCE PLATFORM - .gitignore
+# ============================================================
 
-# C extensions
+# ----------------------------
+# Python
+# ----------------------------
+__pycache__/
+*.py[cod]
+*$py.class
 *.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+pythonenv*
 
 # Distribution / packaging
 .Python
@@ -20,7 +32,6 @@ parts/
 sdist/
 var/
 wheels/
-share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
@@ -216,3 +227,414 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ----------------------------
+# Environment & Secrets
+# ----------------------------
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+*.crt
+*.p12
+*.json.key
+gee-key.json
+service-account-key.json
+credentials.json
+*_secret*.txt
+*_secret*.yml
+*_secret*.yaml
+.secrets/
+
+# ----------------------------
+# IDE / Editor
+# ----------------------------
+# VS Code
+.vscode/
+*.code-workspace
+.history/
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+.idea_modules/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+.vim/
+
+# Emacs
+*~
+#*#
+/.emacs.desktop
+/.emacs.desktop.lock
+
+# ----------------------------
+# OS Generated
+# ----------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.bak
+*.tmp
+*.temp
+*.log
+*.cache
+
+# ----------------------------
+# Project Specific - Logs & Data
+# ----------------------------
+# Logs
+*.log
+logs/
+log/
+/var/log/
+access.log
+error.log
+gunicorn.log
+uvicorn.log
+
+# Temporary files
+/tmp/
+/temp/
+*.tmp
+*.temp
+*.cache
+*.pid
+
+# Uploaded files
+/uploads/
+/static/uploads/
+/media/
+/temp_uploads/
+*.geotiff
+*.tiff
+*.tif
+
+# Cache directories
+.cache/
+cache/
+*.cache
+.parquet/
+.parquet_cache/
+
+# Output directories
+/output/
+/results/
+/exports/
+*.geojson
+*.csv
+*.json
+
+# ----------------------------
+# Docker
+# ----------------------------
+*.pid
+docker-compose.override.yml
+docker-compose.*.yml
+!.dockerignore
+.dockerignore
+
+# ----------------------------
+# Redis
+# ----------------------------
+dump.rdb
+*.rdb
+redis.conf
+sentinel.conf
+
+# ----------------------------
+# BigQuery & GCP
+# ----------------------------
+*.bigquery
+*.bq
+bq_results/
+*.avro
+*.parquet
+
+# ----------------------------
+# Earth Engine
+# ----------------------------
+*.ee
+ee_export/
+ee_results/
+*.tif
+*.tfrecord
+*.TFRecord
+
+# ----------------------------
+# ML Models & Embeddings
+# ----------------------------
+*.pkl
+*.pickle
+*.joblib
+*.h5
+*.hdf5
+*.model
+*.onnx
+*.pt
+*.pth
+embeddings_cache/
+*.vec
+*.bin
+
+# ----------------------------
+# Document Processing
+# ----------------------------
+*.pdf.temp
+*.docx.temp
+*.ocr.temp
+/ocr_cache/
+/pdf_cache/
+
+# ----------------------------
+# Database
+# ----------------------------
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# ----------------------------
+# Kubernetes / Helm
+# ----------------------------
+*.kubeconfig
+helm/values.*.yaml
+!.helm/values.yaml
+helm/charts/
+*.lock
+
+# ----------------------------
+# Terraform
+# ----------------------------
+*.tfstate
+*.tfstate.*
+.terraform/
+terraform.tfvars
+terraform.tfvars.json
+*.auto.tfvars
+override.tf
+override.tf.json
+*.terraform.lock.hcl
+
+# ----------------------------
+# Cloud Run / GCP Deploy
+# ----------------------------
+*.service.yaml
+!deploy/cloud_run.yaml
+!deploy.yaml
+deployments/
+.gcloudignore
+
+# ----------------------------
+# Secrets Management
+# ----------------------------
+*.secret
+*.secret.yaml
+*.secrets
+.secrets/
+secret-manager/
+*.gpg
+*.asc
+
+# ----------------------------
+# Frontend / Static Files (if any)
+# ----------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+dist/
+build/
+.next/
+out/
+*.css.map
+*.js.map
+
+# ----------------------------
+# Test & Coverage
+# ----------------------------
+.coverage
+.coverage.*
+.coverage_data/
+htmlcov/
+.tox/
+.pytest_cache/
+.junit/
+test-reports/
+*.test.log
+*.test.html
+
+# ----------------------------
+# Performance Profiling
+# ----------------------------
+*.prof
+*.lprof
+*.cprofile
+*.pstats
+
+# ----------------------------
+# Backup Files
+# ----------------------------
+*.backup
+*.bak
+*.old
+*.orig
+*.swp
+*~
+
+# ----------------------------
+# Local Development
+# ----------------------------
+local/
+.local/
+.development/
+.develop/
+*.dev
+*.local
+
+# ----------------------------
+# Service Accounts & Keys
+# ----------------------------
+*.json.key
+*.p12
+*.pem
+*.der
+*.crt
+*.csr
+*.keyring
+*.keystore
+gcloud-auth.json
+application_default_credentials.json
+
+# ----------------------------
+# Redis Dumps
+# ----------------------------
+dump.rdb
+appendonly.aof
+redis_*.log
+
+# ----------------------------
+# Celery
+# ----------------------------
+celerybeat-schedule
+celerybeat.pid
+*.pid
+*.celery
+
+# ----------------------------
+# Monitoring
+# ----------------------------
+*.metrics
+*.alerts
+*.dashboard
+prometheus/
+grafana/
+alertmanager/
+
+# ----------------------------
+# Documentation Builds
+# ----------------------------
+docs/_build/
+docs/api/
+site/
+*.epub
+*.mobi
+
+# ----------------------------
+# User-specific files
+# ----------------------------
+*.user
+*.userosscache
+*.sln.docstates
+
+# ----------------------------
+# Large Data Files (keep out of git)
+# ----------------------------
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+*.bz2
+*.xz
+*.iso
+*.dmg
+*.pkg
+*.deb
+*.rpm
+
+# ----------------------------
+# Specific to this project
+# ----------------------------
+# GEE export files
+gee_export_*
+export_*.tif
+
+# Analysis results
+analysis_*.geojson
+ndvi_*.tif
+change_detection_*.tif
+
+# User uploads
+user_uploads/
+temp_uploads/
+*.upload.tmp
+
+# API test files
+test_*.json
+test_*.geojson
+test_*.csv
+
+# Local config overrides
+config.local.py
+settings.local.py
+*.local.py
+
+# Virtual environment
+.env/
+.venv/
+venv/
+virtualenv/
+
+# Python tools
+.ruff_cache/
+.bandit/
+.flake8
+.mypy_cache
+.python-version
+
+# IDE & Editor Specific
+# Spyder
+.spyproject/
+.spyder/
+
+# Rope
+.ropeproject/
+
+# -----------------------------------
+# Keep these files (explicitly allow)
+# -----------------------------------
+!.env.example
+!.gitkeep
+!.dockerignore
+!deploy/cloud_run.yaml
+!deploy.yaml
+!tests/fixtures/*.json
+!tests/fixtures/*.geojson
+

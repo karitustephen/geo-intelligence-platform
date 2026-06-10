@@ -1,2 +1,3 @@
-chmod +x generate_gee_production_scaffold.sh
-./generate_gee_production_scaffold.sh
+# Make executable and run
+chmod +x gee_capstone_setup.sh
+./gee_capstone_setup.sh
