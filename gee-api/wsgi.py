@@ -1,5 +1,5 @@
 """
-WSGI entry point for production deployment - points to main.py
+WSGI entry point for production deployment
 """
 
 from main import app
@@ -9,13 +9,16 @@ application = app
 
 if __name__ == "__main__":
     import uvicorn
-    from config import settings
+    import os
+    
+    port = int(os.getenv("PORT", 8000))
+    host = os.getenv("HOST", "0.0.0.0")
     
     uvicorn.run(
         "main:app",
-        host=settings.HOST,
-        port=settings.PORT,
-        reload=settings.DEBUG,
-        workers=settings.WORKERS,
-        log_level=settings.LOG_LEVEL.lower()
+        host=host,
+        port=port,
+        reload=False,
+        workers=int(os.getenv("WORKERS", "4")),
+        log_level=os.getenv("LOG_LEVEL", "info").lower()
     )

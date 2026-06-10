@@ -81,6 +81,12 @@ try:
 except ImportError:
     SKLEARN_AVAILABLE = False
 
+try:
+    from docx import Document
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -357,6 +363,9 @@ auth_cache = BoundedLRUCache(
     maxsize=settings.max_auth_cache_size,
     ttl_seconds=settings.auth_cache_ttl
 )
+
+# Cache for document embeddings
+embedding_cache = BoundedLRUCache(maxsize=10000, ttl_seconds=3600)
 
 
 # ============================================================
@@ -1869,17 +1878,14 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    """Clean shutdown of all services"""
+    logger.info("🛑 Shutting down...")
+    
+    # Close Google Embeddings if initialized
     try:
         await google_embeddings.close()
     except Exception:
         pass
-    logger.info("Shutting down services")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean shutdown of all services"""
-    logger.info("🛑 Shutting down...")
     
     # Shutdown thread pool
     cpu_executor.shutdown()

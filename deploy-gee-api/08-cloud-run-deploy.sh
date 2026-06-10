@@ -19,7 +19,7 @@ IMAGE_NAME="gcr.io/$PROJECT_ID/$SERVICE_NAME:latest"
 # Build Docker image
 echo "Building Docker image..."
 cd "$GEE_API_DIR"
-docker build -t "$IMAGE_NAME" --build-arg APP_MODULE=main:app .
+docker build -t "$IMAGE_NAME" .
 
 # Push to Container Registry
 echo "Pushing to Container Registry..."
@@ -38,9 +38,10 @@ gcloud run deploy "$SERVICE_NAME" \
     --timeout 300 \
     --min-instances 1 \
     --max-instances 10 \
-    --allow-unauthenticated \
-    --set-env-vars="ENVIRONMENT=production,LOG_LEVEL=INFO,APP_MODULE=main:app" \
+    --service-account geo-intelligence-sa \
+    --set-env-vars="ENVIRONMENT=production,LOG_LEVEL=INFO,PORT=8080" \
     --set-secrets="GEMINI_API_KEY=gee-api-gemini-key:latest,JWT_SECRET=gee-api-jwt-secret:latest" \
+    --allow-unauthenticated=false \
     --quiet
 
 # Get the URL
