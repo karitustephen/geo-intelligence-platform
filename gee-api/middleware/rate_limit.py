@@ -57,6 +57,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.url.path in ["/health", "/healthz", "/ready", "/ping", "/metrics"]:
             return await call_next(request)
 
+        if self.redis_client is None and hasattr(request.app.state, "redis_client"):
+            self.redis_client = getattr(request.app.state, "redis_client", None)
+
         user = getattr(request.state, "user", {})
         user_id = user.get("user_id") if isinstance(user, dict) else None
 
@@ -75,14 +78,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 count = await self.redis_client.incr(minute_key)
                 if count == 1:
                     await self.redis_client.expire(minute_key, 60)
-                if count > limit:
+                if int(count) > limit:
                     logger.warning(f"Rate limit exceeded for {key}: {count}/{limit}")
-                    return JSONResponse(
-                        status_code=429,
-                        content=error_response(
-                            f"Rate limit exceeded. Limit: {limit} requests per minute",
-                            429
-                        ).model_dump()
+                    return error_response(
+                        f"Rate limit exceeded. Limit: {limit} requests per minute",
+                        error_code="RATE_LIMIT_EXCEEDED",
+                        status_code=429
                     )
             except Exception as e:
                 logger.warning(f"Redis rate limit failed, falling back to local: {e}")
@@ -92,12 +93,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         if len(window) >= limit:
             logger.warning(f"Local rate limit exceeded for {key}: {len(window)}/{limit}")
-            return JSONResponse(
-                status_code=429,
-                content=error_response(
-                    "Rate limit exceeded. Please wait 60 seconds.",
-                    429
-                ).model_dump()
+            return error_response(
+                "Rate limit exceeded. Please wait 60 seconds.",
+                error_code="RATE_LIMIT_EXCEEDED",
+                status_code=429
             )
 
         window.append(now)

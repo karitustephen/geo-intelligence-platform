@@ -23,7 +23,7 @@ cd $PROJECT_NAME
 
 echo "[1/10] Creating base files..."
 
-touch main.py
+touch app.py
 touch gee_core.py
 touch ai_insight.py
 touch bq_pipeline.py
@@ -126,7 +126,13 @@ cat > wsgi.py <<EOL
 from main import app
 
 if __name__ == "__main__":
-    app.run()
+    import uvicorn
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8080,
+        log_level="info",
+    )
 EOL
 
 cat > Dockerfile <<EOL
@@ -140,25 +146,27 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 
 EXPOSE 8080
 
-CMD ["gunicorn", "-b", "0.0.0.0:8080", "main:app"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
 EOL
 
 # -----------------------------
-# BASE MAIN FILE
+# BASE APP FILE
 # -----------------------------
 echo "[9/10] Creating base API structure..."
 
-cat > main.py <<EOL
-from flask import Flask, jsonify
+cat > app.py <<EOL
+from fastapi import FastAPI
 
-app = Flask(__name__)
+app = FastAPI()
 
-@app.route("/health")
-def health():
-    return jsonify({"status": "running", "service": "gee-api"})
+@app.get("/health")
+async def health():
+    return {"status": "running", "service": "gee-api"}
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080, debug=True)
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8080, log_level="info")
 EOL
 
 # -----------------------------

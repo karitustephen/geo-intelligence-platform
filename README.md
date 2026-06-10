@@ -35,13 +35,13 @@ The system focuses on **vegetation health monitoring (NDVI analysis)** across Ke
 
 Browser / Client
 ↓
-Flask API (main.py)
+FastAPI API (main.py)
 ↓
-AI Insight Layer (ai_insight.py)
+AI Insight Layer (core/gemini_client.py)
 ↓
-Earth Engine Core (gee_core.py)
+Earth Engine Core (core/gee_client.py)
 ↓
-BigQuery Pipeline (bq_pipeline.py)
+BigQuery Pipeline (services/storage_service.py)
 ↓
 Google Cloud Platform
 
@@ -62,10 +62,15 @@ PHP API Gateway → Python GEE Engine
 geo-intelligence-platform/
 │
 ├── gee-api/
-│   ├── main.py              # API gateway
-│   ├── gee_core.py          # Earth Engine processing
-│   ├── ai_insight.py        # AI reasoning layer
-│   ├── bq_pipeline.py       # BigQuery integration
+│   ├── main.py              # FastAPI application entrypoint
+│   ├── wsgi.py              # Gunicorn/WGSI entrypoint
+│   ├── config.py            # Settings management
+│   ├── core/                # async Earth Engine, Gemini, embeddings, Redis
+│   ├── middleware/          # auth, logging, rate limiting
+│   ├── routes/              # API routes
+│   ├── services/            # domain service layer
+│   ├── models/              # request/response schemas
+│   ├── utils/               # shared helpers and response formatting
 │   └── requirements.txt
 │
 ├── deploy-gee-api/
