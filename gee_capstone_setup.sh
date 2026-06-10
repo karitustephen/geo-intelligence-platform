@@ -92,8 +92,22 @@ echo -e "${NC}"
 # ------------------------------------------------------------
 log_step "Step 1: Validating environment..."
 
+# Check for essential system tools and install if missing
+if ! command -v gcloud >/dev/null 2>&1 || ! command -v bc >/dev/null 2>&1; then
+    log_warn "Essential tools (gcloud or bc) missing. Attempting installation..."
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq apt-transport-https ca-certificates gnupg curl bc
+    if ! command -v gcloud >/dev/null 2>&1; then
+        curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+        echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq google-cloud-cli
+    fi
+    log_success "System tools updated successfully"
+fi
+
 # Check required commands
-REQUIRED_CMDS=("gcloud" "python3" "pip" "curl" "jq")
+REQUIRED_CMDS=("gcloud" "python3" "pip" "curl" "jq" "bc")
 MISSING_CMDS=()
 
 for cmd in "${REQUIRED_CMDS[@]}"; do
@@ -111,7 +125,7 @@ log_success "All required commands available"
 
 # Check Python version
 PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-if [[ "$(echo "$PYTHON_VERSION < 3.9" | bc)" -eq 1 ]]; then
+if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'; then
     log_error "Python 3.9+ required (found $PYTHON_VERSION)"
     exit 1
 fi
@@ -178,8 +192,8 @@ if [[ "$BILLING_ENABLED" != "True" ]]; then
         --format="value(billingEnabled)" 2>/dev/null || echo "False")
     
     if [[ "$BILLING_ENABLED" != "True" ]]; then
-        log_error "Billing still not enabled. Exiting."
-        exit 1
+        log_warn "Billing still not enabled. Continuing in Development/Earth Engine mode..."
+        log_info "Note: Some GCP-native features like Vertex AI or Cloud Run may fail later."
     fi
 fi
 
@@ -214,7 +228,8 @@ fi
 
 log_info "Granting IAM roles..."
 IAM_ROLES=(
-    "roles/editor"
+    "roles/earthengine.admin"
+    "roles/storage.admin"
     "roles/run.admin"
     "roles/secretmanager.admin"
     "roles/bigquery.dataOwner"
@@ -246,8 +261,8 @@ else
 fi
 
 log_info "Creating analysis results table..."
-bq query --use_legacy_sql=false --quiet "
-CREATE TABLE IF NOT EXISTS \\`${PROJECT_ID}.${DATASET_NAME}.analyses\\` (
+bq query --use_legacy_sql=false --quiet '
+CREATE TABLE IF NOT EXISTS `'${PROJECT_ID}.${DATASET_NAME}'.analyses` (
     analysis_id STRING,
     user_id STRING,
     analysis_type STRING,
@@ -255,7 +270,7 @@ CREATE TABLE IF NOT EXISTS \\`${PROJECT_ID}.${DATASET_NAME}.analyses\\` (
     created_at TIMESTAMP,
     status STRING
 ) PARTITION BY DATE(created_at)
-CLUSTER BY user_id, analysis_type" 2>/dev/null || true
+CLUSTER BY user_id, analysis_type' 2>/dev/null || true
 
 log_success "BigQuery setup complete"
 
@@ -268,13 +283,15 @@ BUCKET_NAME="gee-intelligence-${PROJECT_ID}"
 
 if ! gsutil ls "gs://${BUCKET_NAME}" >/dev/null 2>&1; then
     log_info "Creating Cloud Storage bucket: $BUCKET_NAME"
-    gsutil mb -l "$REGION" "gs://${BUCKET_NAME}"
-    gsutil iam ch "serviceAccount:${SERVICE_ACCOUNT_EMAIL}:objectAdmin" "gs://${BUCKET_NAME}"
+    if ! gsutil mb -l "$REGION" "gs://${BUCKET_NAME}" 2>/dev/null; then
+        log_warn "Could not create GCS bucket (likely billing restricted). Using local cache mode."
+    else
+        gsutil iam ch "serviceAccount:${SERVICE_ACCOUNT_EMAIL}:objectAdmin" "gs://${BUCKET_NAME}"
+        log_success "Cloud Storage bucket ready: $BUCKET_NAME"
+    fi
 else
     log_info "Bucket already exists: $BUCKET_NAME"
 fi
-
-log_success "Cloud Storage bucket ready: $BUCKET_NAME"
 
 # ------------------------------------------------------------
 # EARTH ENGINE SETUP

@@ -27,7 +27,7 @@ fi
 
 # Check Python version
 PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-if [[ "$PYTHON_VERSION" &lt; "3.9" ]]; then
+if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'; then
     echo "❌ Python 3.9+ required (found $PYTHON_VERSION)"
     exit 1
 fi
