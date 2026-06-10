@@ -318,26 +318,36 @@ log_success "Python dependencies installed"
 # ------------------------------------------------------------
 log_step "Step 10: Configuring Earth Engine..."
 
-if ! python3 -c "import ee; ee.Initialize()" 2>/dev/null; then
-    log_warn "Earth Engine not authenticated. Starting authentication..."
-    
-    if [[ -f "/tmp/gee-key.json" ]]; then
-        python3 << EOF
+# Generate service account key for Earth Engine if missing
+if [[ ! -f "/tmp/gee-key.json" ]]; then
+    log_info "Generating service account key for Earth Engine..."
+    gcloud iam service-accounts keys create "/tmp/gee-key.json" \
+        --iam-account="${SERVICE_ACCOUNT_EMAIL}" \
+        --project="${PROJECT_ID}" --quiet || log_warn "Failed to generate SA key"
+fi
+
+# Prefer initialization with Service Account (Option B)
+if [[ -f "/tmp/gee-key.json" ]]; then
+    log_info "Initializing Earth Engine with service account..."
+    python3 << EOF && log_success "Earth Engine initialized with service account" && EE_READY=true || EE_READY=false
 import ee
-service_account = '${SERVICE_ACCOUNT_EMAIL}'
-credentials = ee.ServiceAccountCredentials(service_account, '/tmp/gee-key.json')
-ee.Initialize(credentials)
-print("Earth Engine initialized with service account")
+try:
+    credentials = ee.ServiceAccountCredentials('${SERVICE_ACCOUNT_EMAIL}', '/tmp/gee-key.json')
+    ee.Initialize(credentials, project='${PROJECT_ID}')
+except Exception:
+    exit(1)
 EOF
-    else
-        log_info "Running interactive Earth Engine authentication..."
-        earthengine authenticate --quiet || {
-            log_warn "Manual authentication required"
-            earthengine authenticate
-        }
-    fi
-else
-    log_success "Earth Engine already authenticated"
+fi
+
+# Fallback to interactive auth (Option A) if SA initialization failed
+if [[ "${EE_READY:-false}" != "true" ]]; then
+    log_warn "Service account initialization failed. Starting interactive authentication..."
+    log_info "Using --auth_mode=notebook to bypass scope restrictions."
+    earthengine authenticate --auth_mode=notebook || {
+        log_warn "Notebook-mode authentication failed. Falling back to default."
+        earthengine authenticate
+    }
+    log_success "Interactive authentication attempted"
 fi
 
 # ------------------------------------------------------------
@@ -382,13 +392,18 @@ log_success "Secrets configured"
 # ------------------------------------------------------------
 log_step "Step 12: Running validation tests..."
 
-python3 << 'EOF'
+python3 << EOF
 import sys
+import os
 print("[TEST] Testing Google Cloud services...")
 
 try:
     import ee
-    ee.Initialize()
+    if os.path.exists('/tmp/gee-key.json'):
+        credentials = ee.ServiceAccountCredentials('${SERVICE_ACCOUNT_EMAIL}', '/tmp/gee-key.json')
+        ee.Initialize(credentials, project='${PROJECT_ID}')
+    else:
+        ee.Initialize(project='${PROJECT_ID}')
     print("✅ Earth Engine initialized")
 except Exception as e:
     print(f"❌ Earth Engine failed: {e}")
