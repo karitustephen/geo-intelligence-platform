@@ -22,6 +22,7 @@ NC='\033[0m' # No Color
 # ------------------------------------------------------------
 # CONFIGURATION
 # ------------------------------------------------------------
+DEV_MODE="${DEV_MODE:-false}"
 PROJECT_ID="${GCP_PROJECT_ID:-gee-capstone-2026}"
 PROJECT_NAME="${PROJECT_NAME:-Arybit Geospatial Intelligence}"
 REGION="${GCP_REGION:-us-central1}"
@@ -175,6 +176,10 @@ log_success "Active project: $PROJECT_ID (Region: $REGION)"
 # ------------------------------------------------------------
 log_step "Step 4: Checking billing status..."
 
+if [[ "$DEV_MODE" == "true" ]]; then
+    log_info "Dev mode active - skipping billing check"
+    BILLING_ENABLED="False"
+else
 BILLING_ENABLED=$(gcloud beta billing projects describe "$PROJECT_ID" \
     --format="value(billingEnabled)" 2>/dev/null || echo "False")
 
@@ -193,11 +198,16 @@ if [[ "$BILLING_ENABLED" != "True" ]]; then
     
     if [[ "$BILLING_ENABLED" != "True" ]]; then
         log_warn "Billing still not enabled. Continuing in Development/Earth Engine mode..."
-        log_info "Note: Some GCP-native features like Vertex AI or Cloud Run may fail later."
+        log_info "Note: Secret Manager, Cloud Storage, and Vertex AI may fail or hang."
     fi
 fi
+fi
 
-log_success "Billing enabled for project $PROJECT_ID"
+if [[ "$BILLING_ENABLED" == "True" ]]; then
+    log_success "Billing enabled for project $PROJECT_ID"
+else
+    log_warn "Proceeding with billing disabled (Development Mode)"
+fi
 
 # ------------------------------------------------------------
 # ENABLE APIs
@@ -236,11 +246,19 @@ IAM_ROLES=(
     "roles/aiplatform.user"
 )
 
+log_info "Checking existing IAM bindings (optimizing policy updates)..."
+CURRENT_POLICY=$(gcloud projects get-iam-policy "$PROJECT_ID" --format=json 2>/dev/null || echo "{}")
+
 for role in "${IAM_ROLES[@]}"; do
-    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-        --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
-        --role="$role" \
-        --quiet 2>/dev/null || true
+    if echo "$CURRENT_POLICY" | jq -e ".bindings[] | select(.role == \"$role\") | .members[] | select(. == \"serviceAccount:${SERVICE_ACCOUNT_EMAIL}\")" >/dev/null 2>&1; then
+        log_info "Role $role is already assigned to service account."
+    else
+        log_info "Granting role: $role"
+        gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+            --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
+            --role="$role" \
+            --quiet >/dev/null 2>&1 || true
+    fi
 done
 
 log_success "Service account configured: $SERVICE_ACCOUNT_EMAIL"
@@ -355,37 +373,52 @@ fi
 # ------------------------------------------------------------
 log_step "Step 11: Setting up secrets in Secret Manager..."
 
-declare -A SECRETS=(
-    ["gee-api-gemini-key"]="Enter your Google Gemini API key: "
-    ["gee-api-jwt-secret"]="Enter JWT secret (min 32 chars): "
-    ["gee-api-redis-password"]="Enter Redis password (optional): "
-)
+SECRET_MANAGER_STATUS="Skipped (Dev Mode/No Billing)"
 
-for secret_name in "${!SECRETS[@]}"; do
-    if ! gcloud secrets describe "$secret_name" --project="$PROJECT_ID" >/dev/null 2>&1; then
-        log_info "Creating secret: $secret_name"
-        read -s -p "${SECRETS[$secret_name]}" secret_value
-        echo
-        echo -n "$secret_value" | gcloud secrets create "$secret_name" \
+if [[ "$BILLING_ENABLED" == "True" && "$DEV_MODE" != "true" ]]; then
+    declare -A SECRETS=(
+        ["gee-api-gemini-key"]="Enter your Google Gemini API key: "
+        ["gee-api-jwt-secret"]="Enter JWT secret (min 32 chars): "
+        ["gee-api-redis-password"]="Enter Redis password (optional): "
+    )
+
+    for secret_name in "${!SECRETS[@]}"; do
+        if ! timeout 10s gcloud secrets describe "$secret_name" --project="$PROJECT_ID" >/dev/null 2>&1; then
+            log_info "Creating secret: $secret_name"
+            read -s -p "${SECRETS[$secret_name]}" secret_value
+            echo
+            echo -n "$secret_value" | gcloud secrets create "$secret_name" \
+                --project="$PROJECT_ID" \
+                --replication-policy="automatic" \
+                --data-file=- \
+                --quiet
+        else
+            log_info "Secret already exists: $secret_name"
+        fi
+    done
+
+    for secret_name in "${!SECRETS[@]}"; do
+        gcloud secrets add-iam-policy-binding "$secret_name" \
             --project="$PROJECT_ID" \
-            --replication-policy="automatic" \
-            --data-file=- \
-            --quiet
-    else
-        log_info "Secret already exists: $secret_name"
-    fi
-done
-
-for secret_name in "${!SECRETS[@]}"; do
-    gcloud secrets add-iam-policy-binding "$secret_name" \
-        --project="$PROJECT_ID" \
-        --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
-        --role="roles/secretmanager.secretAccessor" \
-        --quiet 2>/dev/null || true
-
-done
-
-log_success "Secrets configured"
+            --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
+            --role="roles/secretmanager.secretAccessor" \
+            --quiet 2>/dev/null || true
+    done
+    log_success "Secrets configured in Secret Manager"
+    SECRET_MANAGER_STATUS="Configured"
+else
+    log_warn "Skipping Secret Manager setup due to billing restrictions."
+    
+    # Better Development Mode Fix: Create a local .env for immediate use
+    cat > ".env" << EOF
+GCP_PROJECT_ID=${PROJECT_ID}
+JWT_SECRET=development_jwt_secret_for_local_use_only_min_32_chars
+REDIS_PASSWORD=development
+GEMINI_API_KEY=
+EOF
+    log_success "Development .env file created locally"
+    SECRET_MANAGER_STATUS="Local .env"
+fi
 
 # ------------------------------------------------------------
 # VALIDATION TESTS
@@ -475,6 +508,11 @@ GEE_SERVICE_ACCOUNT="${SERVICE_ACCOUNT_EMAIL}"
 REDIS_HOST="localhost"
 REDIS_PORT="6379"
 
+# Placeholder secrets if Secret Manager was skipped
+GEMINI_API_KEY="your-gemini-api-key-for-local-dev"
+REDIS_PASSWORD="development_password"
+JWT_SECRET="development_jwt_secret_for_local_use_only_min_32_chars"
+
 # Authentication
 AUTH_MODE="remote"
 INTERNAL_SERVICE_NAME="arybit-geo-intelligence"
@@ -560,7 +598,7 @@ echo "║   ✅ Earth Engine API       : Enabled                         ║"
 echo "║   ✅ BigQuery               : Ready                           ║"
 echo "║   ✅ Vertex AI              : Ready                           ║"
 echo "║   ✅ Cloud Run              : Ready                           ║"
-echo "║   ✅ Secret Manager         : Configured                      ║"
+printf "║   ✅ Secret Manager         : %-30s║\n" "$SECRET_MANAGER_STATUS"
 echo "║                                                               ║"
 echo "╠═══════════════════════════════════════════════════════════════╣"
 echo "║                                                               ║"
