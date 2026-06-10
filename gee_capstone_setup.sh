@@ -27,6 +27,11 @@ PROJECT_ID="${GCP_PROJECT_ID:-gee-capstone-2026}"
 PROJECT_NAME="${PROJECT_NAME:-Arybit Geospatial Intelligence}"
 REGION="${GCP_REGION:-us-central1}"
 DATASET_NAME="${BIGQUERY_DATASET:-gee_dataset}"
+
+# Permanent improvement: Ensure credentials are known to the environment if they exist
+if [[ -f "/tmp/gee-key.json" ]]; then
+    export GOOGLE_APPLICATION_CREDENTIALS="/tmp/gee-key.json"
+fi
 SERVICE_ACCOUNT_NAME="gee-intelligence-sa"
 REQUIRED_SERVICES=(
     "earthengine.googleapis.com"
@@ -316,18 +321,40 @@ fi
 # ------------------------------------------------------------
 log_step "Step 9: Installing Python dependencies..."
 
-pip install --quiet --upgrade \
-    earthengine-api \
-    google-cloud-bigquery \
-    google-cloud-aiplatform \
-    google-cloud-storage \
-    flask \
-    gunicorn \
-    fastapi \
-    uvicorn \
-    httpx \
-    redis \
-    numpy
+# Activate virtual environment if it exists to ensure packages are installed in the correct context
+if [[ -d "/workspaces/geo-intelligence-platform/gee-api/.venv" ]]; then
+    log_info "Activating virtual environment for dependency installation..."
+    source "/workspaces/geo-intelligence-platform/gee-api/.venv/bin/activate"
+fi
+
+# Ensure we don't have the 'jwt' package which conflicts with 'PyJWT'
+python3 -m pip uninstall -y jwt || true
+
+if [[ -f "/workspaces/geo-intelligence-platform/gee-api/requirements.txt" ]]; then
+    log_info "Installing from requirements.txt..."
+    python3 -m pip install --quiet --upgrade -r /workspaces/geo-intelligence-platform/gee-api/requirements.txt
+else
+    log_warn "requirements.txt not found, installing base dependencies..."
+    python3 -m pip install --quiet --upgrade \
+        PyJWT \
+        earthengine-api \
+        google-cloud-bigquery \
+        google-cloud-aiplatform \
+        google-cloud-storage \
+        gunicorn \
+        fastapi \
+        uvicorn \
+        httpx \
+        redis \
+        numpy \
+        python-dotenv \
+        pydantic \
+        pydantic-settings \
+        prometheus-fastapi-instrumentator \
+        prometheus-client \
+        google-genai \
+        python-multipart
+fi
 
 log_success "Python dependencies installed"
 
@@ -372,6 +399,8 @@ fi
 # SECRETS SETUP
 # ------------------------------------------------------------
 log_step "Step 11: Setting up secrets in Secret Manager..."
+
+cd /workspaces/geo-intelligence-platform/gee-api
 
 SECRET_MANAGER_STATUS="Skipped (Dev Mode/No Billing)"
 
@@ -444,8 +473,10 @@ except Exception as e:
 
 try:
     from google.cloud import bigquery
-    client = bigquery.Client()
-    list(client.list_datasets(max_results=1))
+    client = bigquery.Client(project='${PROJECT_ID}')
+    datasets = list(client.list_datasets())
+    for ds in datasets:
+        print(f"Dataset: {ds.dataset_id}")
     print("✅ BigQuery client initialized")
 except Exception as e:
     print(f"❌ BigQuery failed: {e}")
@@ -453,7 +484,7 @@ except Exception as e:
 
 try:
     from google.cloud import storage
-    client = storage.Client()
+    client = storage.Client(project='${PROJECT_ID}')
     list(client.list_buckets(max_results=1))
     print("✅ Cloud Storage client initialized")
 except Exception as e:
@@ -462,7 +493,7 @@ except Exception as e:
 
 try:
     from google.cloud import aiplatform
-    aiplatform.init()
+    aiplatform.init(project='${PROJECT_ID}', location='${REGION}')
     print("✅ Vertex AI initialized")
 except Exception as e:
     print(f"❌ Vertex AI failed: {e}")
@@ -503,6 +534,8 @@ BIGQUERY_DATASET="${DATASET_NAME}"
 
 # Service Account
 GEE_SERVICE_ACCOUNT="${SERVICE_ACCOUNT_EMAIL}"
+GEE_PRIVATE_KEY_PATH="/tmp/gee-key.json"
+GOOGLE_APPLICATION_CREDENTIALS="/tmp/gee-key.json"
 
 # Redis (configure manually if needed)
 REDIS_HOST="localhost"
@@ -555,6 +588,9 @@ case $DEPLOY_CHOICE in
     1)
         log_info "Starting local development server..."
         cd /workspaces/geo-intelligence-platform/gee-api
+        if [[ -d ".venv" ]]; then
+            source .venv/bin/activate
+        fi
         python3 main.py
         ;;
     2)
@@ -605,7 +641,7 @@ echo "║                                                               ║"
 echo "║   📍 Next Steps:                                              ║"
 echo "║                                                               ║"
 echo "║   1. Copy environment file:                                   ║"
-echo "║      cp /tmp/gee-api.env ../gee-api/.env                      ║"
+echo "║      cp /tmp/gee-api.env ./gee-api/.env                       ║"
 echo "║                                                               ║"
 echo "║   2. Edit secrets in .env file                                ║"
 echo "║                                                               ║"
