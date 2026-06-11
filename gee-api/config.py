@@ -2,8 +2,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from pydantic import BaseModel, BaseSettings, Field, field_validator, model_validator
-from pydantic_settings import SettingsConfigDict
+from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _parse_csv_list(value: Any) -> List[str]:
@@ -98,6 +98,12 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     WORKERS: int = 4
     LOG_LEVEL: str = "INFO"
+
+    # ===== Google Cloud =====
+    GCP_PROJECT_ID: str = ""
+    GCP_LOCATION: str = "us-central1"
+    GCS_BUCKET_NAME: str = "geo-intelligence-data"
+    BIGQUERY_DATASET: str = "geospatial_analytics"
 
     # ===== Authentication =====
     AUTH_MODE: str = "remote"

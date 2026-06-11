@@ -22,9 +22,9 @@ try:
     from google import genai
     from google.genai.types import EmbedContentConfig, TaskType
     GOOGLE_AI_AVAILABLE = True
-except Exception:
+except Exception as e:
     GOOGLE_AI_AVAILABLE = False
-    logger.warning("Google Generative AI library not available. Install: pip install google-genai")
+    logger.warning(f"Google Generative AI library not available: {e}. Install: pip install google-genai")
 
 # Try to import sentence-transformers as fallback
 try:

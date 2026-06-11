@@ -14,6 +14,7 @@ import logging
 import hashlib
 import time
 import threading
+import io
 import re
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any, AsyncGenerator, Tuple, Set
@@ -61,6 +62,13 @@ try:
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
+
+try:
+    import pytesseract
+    TESSERACT_AVAILABLE = True
+except ImportError:
+    TESSERACT_AVAILABLE = False
+
 
 try:
     import fitz  # PyMuPDF
@@ -455,6 +463,7 @@ class CircuitBreaker:
 auth_circuit_breaker = CircuitBreaker("auth", threshold=3, timeout=30)
 gemini_circuit_breaker = CircuitBreaker("gemini", threshold=5, timeout=60)
 gee_circuit_breaker = CircuitBreaker("earth_engine", threshold=3, timeout=30)
+ollama_circuit_breaker = CircuitBreaker("ollama", threshold=3, timeout=30)
 redis_circuit_breaker = CircuitBreaker("redis", threshold=3, timeout=30)
 
 

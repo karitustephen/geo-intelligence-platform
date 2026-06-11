@@ -221,10 +221,17 @@ fi
 # ENABLE APIs
 # ------------------------------------------------------------
 log_step "Step 5: Enabling required APIs..."
-
 for service in "${REQUIRED_SERVICES[@]}"; do
     log_info "Activating $service..."
-    gcloud services enable "$service" --quiet
+    # Try to enable service and catch billing-related failures
+    if ! gcloud services enable "$service" --quiet 2>/tmp/service.err; then
+        if grep -q "billing-enabled" /tmp/service.err; then
+            log_warn "Skipping $service (billing required)"
+            continue
+        fi
+        cat /tmp/service.err
+        exit 1
+    fi
     
     # Resilient activation check with retry
     for i in {1..12}; do
@@ -259,15 +266,10 @@ if ! gcloud iam service-accounts describe "$RUN_SA_EMAIL" >/dev/null 2>&1; then
     gcloud iam service-accounts create "$RUN_SA_NAME" --display-name="Arybit API Runtime SA"
 fi
 
-log_info "Configuring Least Privilege IAM roles..."
-
-# Earth Engine Permissions
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-    --member="serviceAccount:${GEE_SA_EMAIL}" --role="roles/earthengine.user" --quiet
+log_info "Configuring GCP IAM roles (Least Privilege)..."
 
 # Runtime Permissions
 RUN_ROLES=(
-    "roles/earthengine.user"
     "roles/storage.objectAdmin"
     "roles/secretmanager.secretAccessor"
     "roles/bigquery.dataEditor"
@@ -276,26 +278,29 @@ RUN_ROLES=(
 )
 
 for role in "${RUN_ROLES[@]}"; do
+    log_info "Assigning $role..."
     gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-        --member="serviceAccount:${RUN_SA_EMAIL}" --role="$role" --quiet
+        --member="serviceAccount:${RUN_SA_EMAIL}" --role="$role" --quiet || log_warn "Failed to assign $role (might require billing or API activation)"
 done
 
 # Cloud Build / Deployment Permissions
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
 
-DEPLOY_ROLES=(
-    "roles/artifactregistry.writer"
-    "roles/artifactregistry.reader"
-    "roles/run.admin"
-    "roles/iam.serviceAccountUser"
-)
+if [[ "$BILLING_ENABLED" == "True" ]]; then
+    DEPLOY_ROLES=(
+        "roles/artifactregistry.writer"
+        "roles/artifactregistry.reader"
+        "roles/run.admin"
+        "roles/iam.serviceAccountUser"
+    )
 
-for sa in "${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" "service-${PROJECT_NUMBER}@gcp-sa-cloudbuild.iam.gserviceaccount.com"; do
-    for role in "${DEPLOY_ROLES[@]}"; do
-        gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-            --member="serviceAccount:${sa}" --role="$role" --quiet || true
+    for sa in "${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" "service-${PROJECT_NUMBER}@gcp-sa-cloudbuild.iam.gserviceaccount.com"; do
+        for role in "${DEPLOY_ROLES[@]}"; do
+            gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+                --member="serviceAccount:${sa}" --role="$role" --quiet || true
+        done
     done
-done
+fi
 
 log_success "Service accounts and Cloud Build IAM configured"
 
@@ -347,7 +352,7 @@ log_step "Step 8: Setting up Cloud Storage..."
 
 BUCKET_NAME="gee-intelligence-${PROJECT_ID}-geo"
 
-if ! gsutil ls "gs://${BUCKET_NAME}" >/dev/null 2>&1; then
+if [[ "$BILLING_ENABLED" == "True" ]] && ! gsutil ls "gs://${BUCKET_NAME}" >/dev/null 2>&1; then
     log_info "Creating Cloud Storage bucket: $BUCKET_NAME"
     if ! gsutil mb -l "$REGION" "gs://${BUCKET_NAME}" 2>/dev/null; then
         log_warn "Could not create GCS bucket (likely billing restricted). Using local cache mode."
@@ -356,18 +361,26 @@ if ! gsutil ls "gs://${BUCKET_NAME}" >/dev/null 2>&1; then
         log_success "Cloud Storage bucket ready: $BUCKET_NAME"
     fi
 else
-    log_info "Bucket already exists: $BUCKET_NAME"
+    if [[ "$BILLING_ENABLED" != "True" ]]; then
+        log_warn "Skipping bucket creation (billing disabled)"
+    else
+        log_info "Bucket already exists: $BUCKET_NAME"
+    fi
 fi
 
 # ------------------------------------------------------------
 # ARTIFACT REGISTRY SETUP
 # ------------------------------------------------------------
-if ! gcloud artifacts repositories describe geo-intelligence --location="$REGION" >/dev/null 2>&1; then
-    log_info "Creating Artifact Registry: geo-intelligence"
-    gcloud artifacts repositories create geo-intelligence \
-        --repository-format=docker --location="$REGION" --quiet
+if [[ "$BILLING_ENABLED" == "True" ]]; then
+    if ! gcloud artifacts repositories describe geo-intelligence --location="$REGION" >/dev/null 2>&1; then
+        log_info "Creating Artifact Registry: geo-intelligence"
+        gcloud artifacts repositories create geo-intelligence \
+            --repository-format=docker --location="$REGION" --quiet
+    fi
+    gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+else
+    log_warn "Skipping Artifact Registry setup (billing disabled)"
 fi
-gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
 
 # ------------------------------------------------------------
 # EARTH ENGINE SETUP
@@ -375,7 +388,7 @@ gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
 log_step "Step 9: Installing Python dependencies..."
 
 cd "$GEE_API_DIR"
-python3 -m venv .venv --quiet || true
+python3 -m venv .venv || true
 source .venv/bin/activate
 
 # Ensure we don't have the 'jwt' package which conflicts with 'PyJWT'
