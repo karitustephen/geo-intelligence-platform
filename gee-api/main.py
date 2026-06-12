@@ -28,6 +28,14 @@ import base64
 from enum import Enum
 import random
 
+from dotenv import load_dotenv
+load_dotenv()
+
+DISABLE_HEAVY_IMPORTS = os.environ.get('DISABLE_HEAVY_IMPORTS', 'false').lower() == 'true'
+DISABLE_SENTENCE_TRANSFORMERS = os.environ.get('DISABLE_SENTENCE_TRANSFORMERS', 'false').lower() == 'true' or DISABLE_HEAVY_IMPORTS
+if DISABLE_HEAVY_IMPORTS:
+    os.environ['DISABLE_SENTENCE_TRANSFORMERS'] = 'true'
+
 # Core dependencies
 import ee
 import numpy as np
@@ -47,10 +55,6 @@ import uvicorn
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.background import BackgroundTask
 from utils.google_embeddings import google_embeddings
-
-# Control heavy library imports to prevent startup hangs/crashes
-DISABLE_HEAVY_IMPORTS = os.environ.get('DISABLE_HEAVY_IMPORTS', 'false').lower() == 'true'
-DISABLE_SENTENCE_TRANSFORMERS = os.environ.get('DISABLE_SENTENCE_TRANSFORMERS', 'false').lower() == 'true' or DISABLE_HEAVY_IMPORTS
 
 # Google AI - Gemini
 GOOGLE_AI_AVAILABLE = False
@@ -102,12 +106,9 @@ try:
 except ImportError:
     DOCX_AVAILABLE = False
 
-from dotenv import load_dotenv
-load_dotenv()
-
 
 # ============================================================
-# CONFIGURATION WITH PRODUCTION HARDENING
+# CONFIGURATION WITH PRODUCTION HARDENing
 # ============================================================
 
 class GeospatialSettings(BaseSettings):

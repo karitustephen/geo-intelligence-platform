@@ -11,6 +11,9 @@ import time
 from typing import List, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import numpy as np
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
