@@ -20,7 +20,12 @@ logger = logging.getLogger(__name__)
 # Try to import Google AI libraries
 try:
     from google import genai
-    from google.genai.types import EmbedContentConfig, TaskType
+    try:
+        from google.genai.types import EmbedContentConfig, TaskType
+    except ImportError:
+        from google.genai import types
+        EmbedContentConfig = types.EmbedContentConfig
+        TaskType = getattr(types, 'TaskType', None)
     GOOGLE_AI_AVAILABLE = True
 except Exception as e:
     GOOGLE_AI_AVAILABLE = False
