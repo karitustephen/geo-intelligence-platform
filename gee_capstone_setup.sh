@@ -396,7 +396,7 @@ python3 -m pip uninstall -y jwt || true
 
 # Upgrade build tools for Python 3.12 compatibility
 log_info "Upgrading build tools..."
-pip install --quiet --upgrade pip setuptools wheel
+pip install --quiet --upgrade pip "setuptools<82" wheel
 
 if [[ -f "requirements.txt" ]]; then
     REQ_FILE="requirements.txt"

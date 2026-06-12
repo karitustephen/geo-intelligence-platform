@@ -6,6 +6,7 @@ Uses Google's embedding models for high-quality vector representations
 import asyncio
 import hashlib
 import logging
+import os
 import time
 from typing import List, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
@@ -17,26 +18,29 @@ from config import get_config
 
 logger = logging.getLogger(__name__)
 
-# Try to import Google AI libraries
-try:
-    from google import genai
-    try:
-        from google.genai.types import EmbedContentConfig, TaskType
-    except ImportError:
-        from google.genai import types
-        EmbedContentConfig = types.EmbedContentConfig
-        TaskType = getattr(types, 'TaskType', None)
-    GOOGLE_AI_AVAILABLE = True
-except Exception as e:
-    GOOGLE_AI_AVAILABLE = False
-    logger.warning(f"Google Generative AI library not available: {e}. Install: pip install google-genai")
+GOOGLE_AI_AVAILABLE = False
+SENTENCE_TRANSFORMERS_AVAILABLE = False
 
-# Try to import sentence-transformers as fallback
-try:
-    from sentence_transformers import SentenceTransformer
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-except Exception:
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
+DISABLE_HEAVY_IMPORTS = os.environ.get('DISABLE_HEAVY_IMPORTS', 'false').lower() == 'true'
+DISABLE_SENTENCE_TRANSFORMERS = os.environ.get('DISABLE_SENTENCE_TRANSFORMERS', 'false').lower() == 'true' or DISABLE_HEAVY_IMPORTS
+
+def _check_imports():
+    global GOOGLE_AI_AVAILABLE, SENTENCE_TRANSFORMERS_AVAILABLE
+    if not GOOGLE_AI_AVAILABLE and not DISABLE_HEAVY_IMPORTS:
+        try:
+            from google import genai
+            GOOGLE_AI_AVAILABLE = True
+        except Exception:
+            GOOGLE_AI_AVAILABLE = False
+            
+    if not SENTENCE_TRANSFORMERS_AVAILABLE and not DISABLE_SENTENCE_TRANSFORMERS:
+        try:
+            from sentence_transformers import SentenceTransformer
+            SENTENCE_TRANSFORMERS_AVAILABLE = True
+        except Exception:
+            SENTENCE_TRANSFORMERS_AVAILABLE = False
+
+_check_imports()
 
 
 class CircuitBreaker:
@@ -173,8 +177,12 @@ class GoogleEmbeddingsClient:
         if self._initialized:
             return
         
+        _check_imports()
+        
         if not GOOGLE_AI_AVAILABLE:
-            logger.error("Google Generative AI library not available")
+            logger.warning("Google Generative AI library not available or disabled")
+            if DISABLE_HEAVY_IMPORTS:
+                return
             raise RuntimeError("Google Generative AI library required for embeddings")
         
         config = get_config()
@@ -191,6 +199,7 @@ class GoogleEmbeddingsClient:
             raise RuntimeError("GEMINI_API_KEY is required for Google embeddings")
         
         try:
+            from google import genai
             self.client = genai.Client(api_key=gemini_api_key)
             self.model = model
             self._initialized = True
@@ -263,6 +272,7 @@ class GoogleEmbeddingsClient:
         
         async def _embed():
             try:
+                from google.genai.types import EmbedContentConfig
                 # Use thread pool for synchronous API call
                 loop = asyncio.get_event_loop()
                 response = await loop.run_in_executor(
@@ -414,11 +424,13 @@ class GoogleEmbeddingsClient:
     
     async def _fallback_embedding(self, text: str) -> Optional[List[float]]:
         """Fallback to sentence-transformers when Google API fails"""
+        _check_imports()
         if not SENTENCE_TRANSFORMERS_AVAILABLE:
             logger.warning("No embedding fallback available")
             return None
         
         try:
+            from sentence_transformers import SentenceTransformer
             loop = asyncio.get_event_loop()
             model = SentenceTransformer('all-MiniLM-L6-v2')
             embedding = await loop.run_in_executor(self.executor, model.encode, text)

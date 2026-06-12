@@ -48,11 +48,16 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.background import BackgroundTask
 from utils.google_embeddings import google_embeddings
 
+# Control heavy library imports to prevent startup hangs/crashes
+DISABLE_HEAVY_IMPORTS = os.environ.get('DISABLE_HEAVY_IMPORTS', 'false').lower() == 'true'
+DISABLE_SENTENCE_TRANSFORMERS = os.environ.get('DISABLE_SENTENCE_TRANSFORMERS', 'false').lower() == 'true' or DISABLE_HEAVY_IMPORTS
+
 # Google AI - Gemini
+GOOGLE_AI_AVAILABLE = False
 try:
-    from google import genai
-    from google.genai.types import GenerateContentConfig
-    GOOGLE_AI_AVAILABLE = True
+    if not DISABLE_HEAVY_IMPORTS:
+        from google import genai
+        GOOGLE_AI_AVAILABLE = True
 except Exception:
     GOOGLE_AI_AVAILABLE = False
 
@@ -76,11 +81,13 @@ try:
 except ImportError:
     FITZ_AVAILABLE = False
 
-try:
-    from sentence_transformers import SentenceTransformer
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
+SENTENCE_TRANSFORMERS_AVAILABLE = False
+if not DISABLE_SENTENCE_TRANSFORMERS:
+    try:
+        from sentence_transformers import SentenceTransformer
+        SENTENCE_TRANSFORMERS_AVAILABLE = True
+    except Exception:
+        SENTENCE_TRANSFORMERS_AVAILABLE = False
 
 try:
     from sklearn.ensemble import RandomForestClassifier
@@ -1035,6 +1042,7 @@ class GeminiAIClient:
             logger.warning("Google Generative AI library not available")
             return
         try:
+            from google import genai
             self.client = genai.Client(api_key=settings.gemini_api_key)
             self._initialized = True
             logger.info(f"Gemini AI initialized with model: {settings.gemini_model}")
@@ -1056,6 +1064,7 @@ class GeminiAIClient:
         async def _generate():
             start = time.time()
             try:
+                from google.genai.types import GenerateContentConfig
                 if stream:
                     return await self._stream_response(prompt)
                 response = await cpu_executor.run(
@@ -1097,6 +1106,7 @@ class GeminiAIClient:
         return prompt
 
     async def _stream_response(self, prompt: str):
+        from google.genai.types import GenerateContentConfig
         response = self.client.models.generate_content_stream(
             model=settings.gemini_model,
             contents=prompt,
@@ -1168,6 +1178,7 @@ class OllamaClient:
             logger.warning(f"Embedding failed: {e}")
             if SENTENCE_TRANSFORMERS_AVAILABLE:
                 try:
+                    from sentence_transformers import SentenceTransformer
                     model = SentenceTransformer('all-MiniLM-L6-v2')
                     embedding = await cpu_executor.run(model.encode, text)
                     return embedding.tolist()
@@ -1351,6 +1362,7 @@ class DocumentIntelligenceService:
     @staticmethod
     def _semantic_chunk(text: str, threshold: float = 0.45) -> List[str]:
         try:
+            from sentence_transformers import SentenceTransformer
             model = SentenceTransformer('all-MiniLM-L6-v2')
             sentences = re.split(r'(?<=[.!?])\s+', text)
 
